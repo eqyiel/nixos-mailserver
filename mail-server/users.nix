@@ -22,7 +22,7 @@ let
   vmail_user = {
     name = vmailUserName;
     isNormalUser = false;
-    uid = vmailUIDStart;
+    uid = vmailUID;
     home = mailDirectory;
     createHome = true;
     group = vmailGroupName;
@@ -30,28 +30,91 @@ let
 
   # accountsToUser :: String -> UserRecord
   accountsToUser = account: {
-    name = account.name;
-    isNormalUser = false;
-    group = vmailGroupName;
+    name = lib.head (lib.splitString "@" account.name);
+    domain = lib.head (lib.tail (lib.splitString "@" account.name));
     inherit (account) hashedPassword;
   };
 
-  # mail_users :: { [String]: UserRecord }
-  mail_users = lib.foldl (prev: next: prev // { "${next.name}" = next; }) {}
-    (map accountsToUser (lib.attrValues loginAccounts));
+  virtualMailUsersActivationScript = pkgs.writeScript "activate-virtual-mail-users" ''
+    #!${pkgs.stdenv.shell}
 
-in
-{
+    set -euo pipefail
 
+    # Create mailDirectory if it doesn't exist.
+    if (! test -d "${mailDirectory}"); then
+      mkdir -p "${mailDirectory}"
+      chown ${vmailUserName}:${vmailGroupName}
+      chmod 700 "${mailDirectory}"
+    fi
+
+    # Create a passwd and shadow file under mailDirectory/domain for each domain
+    # in cfg.domains.
+    ${lib.concatMapStringsSep "\n"
+      (domain: let domainDir = "${mailDirectory}/${domain}"; in ''
+        # Create per-domain directory if it doesn't exist.
+        if (! test -d "${domainDir}"); then
+          mkdir -p "${domainDir}"
+        fi
+
+        chown -R ${vmailUserName}:${vmailGroupName} "${domainDir}"
+
+        # Remove per-domain passwd file if it already exists, then (re)create it
+        # with the proper permissions.
+        if (test -f "${domainDir}/passwd"); then
+          rm "${domainDir}/passwd"
+        fi
+
+        touch "${domainDir}/passwd"
+        chown ${vmailUserName}:${vmailGroupName} "${domainDir}/passwd"
+        chmod 700 "${domainDir}/passwd"
+
+        # Remove per-domain shadow file if it already exists, then (re)create it
+        # with the proper permissions.
+        if (test -f "${domainDir}/shadow"); then
+          rm "${domainDir}/shadow"
+        fi
+
+        touch "${domainDir}/shadow"
+        chown ${vmailUserName}:${vmailGroupName} "${domainDir}/shadow"
+        chmod 700 ${domainDir}/shadow
+      '') (domains)}
+
+      # Add virtual users in cfg.loginAccounts to per-domain password and shadow
+      # files.
+      ${lib.concatMapStringsSep "\n"
+      ({ name, domain, hashedPassword, ... }:
+        let
+          domainDir = "${mailDirectory}/${domain}";
+
+          vmailGID = vmailUID;
+        in ''
+          echo "${name}@${domain}::${toString vmailUID}:${toString vmailGID}::${domainDir}/${name}" >> \
+            "${domainDir}/passwd"
+          # The next line is single-quoted to prevent expansion of special
+          # characters in the hashed password.
+          echo '${name}@${domain}:${hashedPassword}' >> "${domainDir}/shadow"
+        '') (map accountsToUser (lib.attrValues loginAccounts))}
+  '';
+in {
   config = lib.mkIf enable {
     # set the vmail gid to a specific value
     users.groups = {
-      "${vmailGroupName}" = { gid = vmailUIDStart; };
+      "${vmailGroupName}" = { gid = vmailUID; };
     };
 
-    # define all users
-    users.users = mail_users // {
+    # define all names
+    users.users = {
       "${vmail_user.name}" = lib.mkForce vmail_user;
+    };
+
+    systemd.services.activate-virtual-mail-users = {
+      after = [ "network.target" ];
+      wantedBy = [ "multi-user.target" ];
+      before = [ "dovecot2.service" ];
+      serviceConfig = {
+        ExecStart = virtualMailUsersActivationScript;
+      };
+      enable = true;
     };
   };
 }

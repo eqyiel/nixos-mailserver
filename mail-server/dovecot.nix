@@ -31,9 +31,11 @@ in
       enable = true;
       enableImap = enableImap;
       enablePop3 = enablePop3;
+      enablePAM = false;
       mailGroup = vmailGroupName;
       mailUser = vmailUserName;
       mailLocation = dovecot_maildir;
+      showPAMFailure = false;
       sslServerCert = certificatePath;
       sslServerKey = keyPath;
       enableLmtp = true;
@@ -83,6 +85,16 @@ in
         }
 
         auth_mechanisms = plain login
+
+        passdb {
+          args = ${mailDirectory}/%d/shadow
+          driver = passwd-file
+        }
+
+        userdb {
+          args = ${mailDirectory}/%d/passwd
+          driver = passwd-file
+        }
 
         namespace inbox {
           inbox = yes
