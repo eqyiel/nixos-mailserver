@@ -1,5 +1,3 @@
-(Use this template for bugs, feel free to delete it for other issues)
-
 #### SNM Version: (e.g. v2.1.3)
 #### Nixos Version: (e.g. 18.03 or unstable)
 
